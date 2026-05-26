@@ -7,10 +7,11 @@ const nextConfig: NextConfig = {
 					removeConsole: {
 						exclude: ['error', 'warn', 'info', 'table'],
 					},
+					reactRemoveProperties: { properties: ['^data-testid$'] },
 				}
 			: {}),
-		...(process.env.NODE_ENV === 'production' ? { reactRemoveProperties: { properties: ['^data-testid$'] } } : {}),
 	},
+	output: 'standalone',
 	cacheComponents: true,
 	pageExtensions: ['ts', 'tsx'],
 	poweredByHeader: false,
@@ -25,9 +26,16 @@ const nextConfig: NextConfig = {
 		resolveExtensions: ['.mdx', '.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
 	},
 	typedRoutes: true,
-	experimental: {
-		serverSourceMaps: false,
-	},
+	serverExternalPackages: ['pdfmake', 'pdfkit'],
+	// images: {
+	// 	remotePatterns: [
+	// 		{
+	// 			protocol: 'https',
+	// 			hostname: 'api.dicebear.com',
+	// 		},
+	// 	],
+	// 	dangerouslyAllowSVG: true,
+	// },
 }
 
 export default nextConfig

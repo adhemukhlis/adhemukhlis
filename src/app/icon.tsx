@@ -6,6 +6,7 @@ export const size = {
 	width: 36,
 	height: 36,
 }
+
 export const contentType = 'image/png'
 
 const Icon = () => {
@@ -28,4 +29,5 @@ const Icon = () => {
 		},
 	)
 }
+
 export default Icon

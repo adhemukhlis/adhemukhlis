@@ -1,0 +1,21 @@
+/* ============================================================
+   COMMON.CSS — Utility Classes
+   ============================================================ */
+
+.column {
+	flex-direction: column;
+}
+
+.page {
+	display: flex;
+	overflow-x: auto;
+	flex: 1;
+}
+
+.justify-center {
+	justify-content: center;
+}
+
+.align-center {
+	align-items: center;
+}
