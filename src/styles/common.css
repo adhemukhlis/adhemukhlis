@@ -19,3 +19,34 @@
 .align-center {
 	align-items: center;
 }
+
+.loader {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100vh;
+	max-height: 100dvh;
+	background-color: #f3f4f6;
+	color: #1f2937;
+	overflow: hidden;
+}
+
+.spinner {
+	width: 32px;
+	aspect-ratio: 1/1;
+	border: 3px solid #e5e7eb;
+	border-top: 3px solid #3b82f6;
+	border-radius: 50%;
+	animation: spinner-animation 0.8s linear infinite;
+}
+
+@keyframes spinner-animation {
+	0% {
+		transform: rotate(0deg);
+	}
+
+	100% {
+		transform: rotate(360deg);
+	}
+}

@@ -1,71 +1,90 @@
 'use client'
 
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
-import { useEffect, useRef, useState } from 'react'
+import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist'
+import { use, useEffect, useRef, useState } from 'react'
+
+import styles from './pdf-viewer.module.css'
 
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 
-import './pdf-viewer.css'
-
-// Set worker src using local public path
 GlobalWorkerOptions.workerSrc = '/workers/pdf.worker.min.mjs'
 
-export default function PdfViewer() {
-	const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null)
-	const [numPages, setNumPages] = useState<number>(0)
-	const [currentPage, setCurrentPage] = useState<number>(1)
-	const [scale, setScale] = useState<number>(1.0)
-	const [loading, setLoading] = useState<boolean>(true)
-	const [error, setError] = useState<string | null>(null)
+interface PdfPromiseResult {
+	doc: PDFDocumentProxy | null
+	error: string | null
+}
 
-	const workspaceRef = useRef<HTMLDivElement>(null)
-	const canvasRef = useRef<HTMLCanvasElement>(null)
-	const renderTaskRef = useRef<RenderTask | null>(null)
+const pdfCache = new Map<string, Promise<PdfPromiseResult>>()
 
-	useEffect(() => {
-		let isMounted = true
+function getPdfPromise(src: string): Promise<PdfPromiseResult> {
+	let promise = pdfCache.get(src)
 
-		const loadPdf = async () => {
+	if (!promise) {
+		const load = async (): Promise<PdfPromiseResult> => {
 			try {
-				setLoading(true)
-				setError(null)
-
-				const response = await fetch('/api/pdf/dummy')
+				const response = await fetch(src)
 
 				if (!response.ok) {
 					throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`)
 				}
 
 				const arrayBuffer = await response.arrayBuffer()
-
-				if (!isMounted) {
-					return
-				}
-
 				const loadingTask = getDocument({ data: arrayBuffer })
 				const doc = await loadingTask.promise
 
-				if (isMounted) {
-					setPdfDoc(doc)
-					setNumPages(doc.numPages)
-					setLoading(false)
-				}
+				return { doc, error: null }
 			} catch (err: unknown) {
 				const error = err as { message?: string }
 
 				console.error('Error loading PDF:', err)
 
-				if (isMounted) {
-					setError(error.message || 'Failed to load PDF document')
-					setLoading(false)
-				}
+				return { doc: null, error: error.message || 'Failed to load PDF document' }
 			}
 		}
 
-		loadPdf()
+		promise = load()
+		pdfCache.set(src, promise)
+	}
+
+	return promise
+}
+
+export default function PdfViewer({ src }: { src: string }) {
+	const isMountedRef = useRef<boolean>(false)
+
+	const pdfPromise = getPdfPromise(src)
+
+	const { doc: pdfDoc, error } = use(pdfPromise)
+	const numPages = pdfDoc?.numPages || 0
+
+	const [currentPage, setCurrentPage] = useState<number>(1)
+	const [scale, setScale] = useState<number>(1.0)
+	const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null)
+	const [workspaceWidth, setWorkspaceWidth] = useState<number>(0)
+	const [workspaceHeight, setWorkspaceHeight] = useState<number>(0)
+
+	const workspaceRef = useRef<HTMLDivElement>(null)
+	const canvasRef = useRef<HTMLCanvasElement>(null)
+	const textLayerRef = useRef<HTMLDivElement>(null)
+	const renderTaskRef = useRef<RenderTask | null>(null)
+	const textLayerInstanceRef = useRef<TextLayer | null>(null)
+
+	useEffect(() => {
+		isMountedRef.current = true
+
+		const handleResize = () => {
+			if (workspaceRef.current) {
+				setWorkspaceWidth(workspaceRef.current.clientWidth)
+				setWorkspaceHeight(workspaceRef.current.clientHeight)
+			}
+		}
+
+		handleResize()
+		window.addEventListener('resize', handleResize)
 
 		return () => {
-			isMounted = false
+			isMountedRef.current = false
+			window.removeEventListener('resize', handleResize)
 		}
 	}, [])
 
@@ -74,17 +93,53 @@ export default function PdfViewer() {
 			return
 		}
 
-		let isMounted = true
-
 		const renderPage = async () => {
 			try {
+				if (textLayerInstanceRef.current) {
+					textLayerInstanceRef.current.cancel()
+				}
+
+				if (textLayerRef.current) {
+					textLayerRef.current.innerHTML = ''
+				}
+
 				const page = await pdfDoc.getPage(currentPage)
 
-				if (!isMounted) {
+				if (!isMountedRef.current) {
 					return
 				}
 
-				const viewport = page.getViewport({ scale })
+				const originalViewport = page.getViewport({ scale: 1.0 })
+				const pageWidth = originalViewport.width
+				const pageHeight = originalViewport.height
+
+				// Dynamically compute padding from CSS styles to prevent overflow scrollbars
+				let paddingX = 32
+				let paddingY = 32
+				const workspace = workspaceRef.current
+
+				if (workspace) {
+					const style = window.getComputedStyle(workspace)
+
+					paddingX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+					paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
+				}
+
+				// Subtract a tiny safety buffer (4px) to prevent subpixel layout rounding from triggering unnecessary scrollbars
+				const availWidth = Math.max(workspaceWidth - paddingX - 4, 200)
+				const availHeight = Math.max(workspaceHeight - paddingY - 4, 200)
+
+				const scaleX = availWidth / pageWidth
+				const scaleY = availHeight / pageHeight
+				const fitScale = Math.min(scaleX, scaleY)
+
+				const actualScale = scale * fitScale
+				const viewport = page.getViewport({ scale: actualScale })
+
+				if (isMountedRef.current) {
+					setDimensions({ width: viewport.width, height: viewport.height })
+				}
+
 				const canvas = canvasRef.current
 
 				if (!canvas) {
@@ -97,13 +152,10 @@ export default function PdfViewer() {
 					return
 				}
 
-				// High-DPI scaling rendering
 				const dpr = window.devicePixelRatio || 1
 
 				canvas.width = viewport.width * dpr
 				canvas.height = viewport.height * dpr
-				canvas.style.width = `${viewport.width}px`
-				canvas.style.height = `${viewport.height}px`
 
 				const renderContext = {
 					canvasContext: context,
@@ -118,10 +170,32 @@ export default function PdfViewer() {
 
 				renderTaskRef.current = page.render(renderContext)
 				await renderTaskRef.current.promise
+
+				// Render Text Layer overlay for high-fidelity text selection & copying
+				if (!isMountedRef.current) {
+					return
+				}
+
+				if (textLayerRef.current) {
+					const textContent = await page.getTextContent()
+
+					if (!isMountedRef.current) {
+						return
+					}
+
+					const textLayer = new TextLayer({
+						textContentSource: textContent,
+						container: textLayerRef.current,
+						viewport: viewport,
+					})
+
+					textLayerInstanceRef.current = textLayer
+					await textLayer.render()
+				}
 			} catch (err: unknown) {
 				const error = err as { name?: string; message?: string }
 
-				if (error.name !== 'RenderingCancelledException') {
+				if (error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
 					console.error(`Error rendering page ${currentPage}:`, err)
 				}
 			}
@@ -130,23 +204,23 @@ export default function PdfViewer() {
 		renderPage()
 
 		return () => {
-			isMounted = false
-
 			if (renderTaskRef.current) {
 				renderTaskRef.current.cancel()
 			}
+
+			if (textLayerInstanceRef.current) {
+				textLayerInstanceRef.current.cancel()
+			}
 		}
-	}, [pdfDoc, currentPage, scale])
+	}, [pdfDoc, currentPage, scale, workspaceWidth, workspaceHeight])
 
 	return (
-		<div className="pdf-viewer-container">
-			{/* Minimalist Top Toolbar */}
-			<div className="pdf-toolbar">
-				{/* Page Navigation */}
-				<div className="pdf-toolbar-section">
+		<div className={styles.pdfViewerContainer}>
+			<div className={styles.pdfToolbar}>
+				<div className={styles.pdfToolbarSection}>
 					<button
 						type="button"
-						className="pdf-btn"
+						className={styles.pdfBtn}
 						onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
 						disabled={currentPage <= 1}
 						title="Previous Page">
@@ -161,13 +235,13 @@ export default function PdfViewer() {
 						</svg>
 					</button>
 
-					<span className="pdf-page-indicator">
+					<span className={styles.pdfPageIndicator}>
 						{currentPage} / {numPages || '—'}
 					</span>
 
 					<button
 						type="button"
-						className="pdf-btn"
+						className={styles.pdfBtn}
 						onClick={() => setCurrentPage((p) => Math.min(p + 1, numPages))}
 						disabled={currentPage >= numPages}
 						title="Next Page">
@@ -183,13 +257,13 @@ export default function PdfViewer() {
 					</button>
 				</div>
 
-				<div className="divider" />
+				<div className={styles.divider} />
 
 				{/* Zoom Controls */}
-				<div className="pdf-toolbar-section">
+				<div className={styles.pdfToolbarSection}>
 					<button
 						type="button"
-						className="pdf-btn"
+						className={styles.pdfBtn}
 						onClick={() => setScale((s) => Math.max(s - 0.2, 0.6))}
 						disabled={scale <= 0.6}
 						title="Zoom Out">
@@ -209,11 +283,11 @@ export default function PdfViewer() {
 						</svg>
 					</button>
 
-					<span className="pdf-zoom-label">{Math.round(scale * 100)}%</span>
+					<span className={styles.pdfZoomLabel}>{Math.round(scale * 100)}%</span>
 
 					<button
 						type="button"
-						className="pdf-btn"
+						className={styles.pdfBtn}
 						onClick={() => setScale((s) => Math.min(s + 0.2, 2.0))}
 						disabled={scale >= 2.0}
 						title="Zoom In">
@@ -240,62 +314,41 @@ export default function PdfViewer() {
 					</button>
 				</div>
 			</div>
-
-			{/* Workspace */}
 			<div
 				ref={workspaceRef}
-				className="pdf-workspace">
-				{loading && (
-					<div className="pdf-loading-overlay">
-						<div className="pdf-spinner" />
-						<div className="pdf-loading-text">Loading PDF...</div>
-					</div>
-				)}
-
+				className={styles.pdfWorkspace}>
 				{error && (
-					<div className="pdf-error-container">
-						<svg
-							className="pdf-error-icon"
-							width="40"
-							height="40"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							viewBox="0 0 24 24">
-							<circle
-								cx="12"
-								cy="12"
-								r="10"
-							/>
-							<line
-								x1="12"
-								y1="8"
-								x2="12"
-								y2="12"
-							/>
-							<line
-								x1="12"
-								y1="16"
-								x2="12.01"
-								y2="16"
-							/>
-						</svg>
-						<h2 className="pdf-error-title">Failed to load PDF</h2>
-						<p className="pdf-error-message">{error}</p>
+					<div className={styles.pdfErrorContainer}>
+						<h2 className={styles.pdfErrorTitle}>Failed to load PDF</h2>
+						<p className={styles.pdfErrorMessage}>{error}</p>
 						<button
 							type="button"
-							className="pdf-btn pdf-btn-primary"
+							className={`${styles.pdfBtn} ${styles.pdfBtnPrimary}`}
 							onClick={() => window.location.reload()}>
 							Retry
 						</button>
 					</div>
 				)}
 
-				{!loading && !error && pdfDoc && (
-					<div className="pdf-page-container">
+				{!error && pdfDoc && (
+					<div
+						className={styles.pdfPageContainer}
+						style={
+							dimensions
+								? {
+										width: `${dimensions.width}px`,
+										height: `${dimensions.height}px`,
+										aspectRatio: `${dimensions.width} / ${dimensions.height}`,
+									}
+								: undefined
+						}>
 						<canvas
 							ref={canvasRef}
-							className="pdf-page-canvas"
+							className={styles.pdfPageCanvas}
+						/>
+						<div
+							ref={textLayerRef}
+							className="textLayer"
 						/>
 					</div>
 				)}

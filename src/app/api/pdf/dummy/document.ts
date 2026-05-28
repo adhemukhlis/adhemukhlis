@@ -3,10 +3,10 @@ import type { ContentColumns, ContentText, ContentUnorderedList, TDocumentDefini
 const CM = 28.35 as const
 
 const disclaimerText =
-	'This document is a dummy file created solely for development and testing ' +
-	'purposes. All content contained herein does not represent actual data and ' +
-	'holds no legal validity. Please do not use this document for any official ' +
-	'or operational purposes.'
+	'This document is a dummy file created solely for development and testing purposes. All content contained herein does not represent actual data and holds no legal validity. Please do not use this document for any official or operational purposes.'
+
+const pageBreakText =
+	'This is the second page of the dummy document. It is created to test multi-page rendering, navigation controls, page numbers, and custom zoom features across different viewport layouts.'
 
 const heading: ContentText = {
 	text: 'DUMMY DOCUMENT',
@@ -22,6 +22,13 @@ const sectionTitle: ContentText = {
 	margin: [0, 72, 0, 0],
 }
 
+const sectionTitlePageBreak: ContentText = {
+	text: 'Page Break Example',
+	bold: true,
+	fontSize: 16,
+	margin: [0, 0, 0, 0],
+}
+
 const bodyText = (text: string): ContentText => ({
 	text,
 	fontSize: 12,
@@ -35,14 +42,14 @@ const bulletList: ContentColumns = {
 		{
 			ul: ['Dummy Document', 'Development Purpose', 'Do not use in real operational cases'],
 			fontSize: 12,
-			margin: [0, 10, 0, 0],
+			margin: [0, 0, 0, 0],
 		} satisfies ContentUnorderedList,
 	],
 }
 
 export const docDefinition = (): TDocumentDefinitions => {
 	const dateStamp: ContentText = {
-		text: new Date().toLocaleDateString('en-GB', {
+		text: new Date().toLocaleDateString('en-US', {
 			day: '2-digit',
 			month: 'long',
 			year: 'numeric',
@@ -73,7 +80,17 @@ export const docDefinition = (): TDocumentDefinitions => {
 			creator: '',
 			producer: '',
 		},
-		content: [heading, dateStamp, sectionTitle, bodyText(disclaimerText), bulletList, bodyText(disclaimerText)],
+		content: [
+			heading,
+			dateStamp,
+			sectionTitle,
+			bodyText(disclaimerText),
+			bulletList,
+			bodyText(disclaimerText),
+			{ text: '', pageBreak: 'before' },
+			sectionTitlePageBreak,
+			bodyText(pageBreakText),
+		],
 		defaultStyle: {
 			font: 'NotoSerif',
 			color: '#000',
