@@ -1,7 +1,7 @@
 'use client'
 
-import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist'
-import { use, useEffect, useRef, useState } from 'react'
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
+import { use, useCallback, useEffect, useRef, useState } from 'react'
 
 import styles from './pdf-viewer.module.css'
 
@@ -49,100 +49,52 @@ function getPdfPromise(src: string): Promise<PdfPromiseResult> {
 	return promise
 }
 
-export default function PdfViewer({ src }: { src: string }) {
-	const isMountedRef = useRef<boolean>(false)
+interface PdfPageProps {
+	pageNumber: number
+	pdfDoc: PDFDocumentProxy
+	scale: number
+	workspaceWidth: number
+	workspaceHeight: number
+	onAspectRatioCalculated: (pageNumber: number, aspectRatio: number) => void
+}
 
-	const pdfPromise = getPdfPromise(src)
-
-	const { doc: pdfDoc, error } = use(pdfPromise)
-	const numPages = pdfDoc?.numPages || 0
-
-	const [currentPage, setCurrentPage] = useState<number>(1)
-	const [scale, setScale] = useState<number>(1.0)
-	const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null)
-	const [workspaceWidth, setWorkspaceWidth] = useState<number>(0)
-	const [workspaceHeight, setWorkspaceHeight] = useState<number>(0)
-
-	const workspaceRef = useRef<HTMLDivElement>(null)
+/* Isolated Page Component to manage rendering and cancellation lifecycle safely */
+function PdfPage({ pageNumber, pdfDoc, scale, workspaceWidth, workspaceHeight, onAspectRatioCalculated }: PdfPageProps) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
-	const textLayerRef = useRef<HTMLDivElement>(null)
 	const renderTaskRef = useRef<RenderTask | null>(null)
-	const textLayerInstanceRef = useRef<TextLayer | null>(null)
+	const [isPageLoading, setIsPageLoading] = useState<boolean>(true)
 
 	useEffect(() => {
-		isMountedRef.current = true
-
-		const handleResize = () => {
-			if (workspaceRef.current) {
-				setWorkspaceWidth(workspaceRef.current.clientWidth)
-				setWorkspaceHeight(workspaceRef.current.clientHeight)
-			}
-		}
-
-		handleResize()
-		window.addEventListener('resize', handleResize)
-
-		return () => {
-			isMountedRef.current = false
-			window.removeEventListener('resize', handleResize)
-		}
-	}, [])
-
-	useEffect(() => {
-		if (!pdfDoc) {
-			return
-		}
+		let isCancelled = false
 
 		const renderPage = async () => {
 			try {
-				if (textLayerInstanceRef.current) {
-					textLayerInstanceRef.current.cancel()
-				}
+				setIsPageLoading(true)
+				const page = await pdfDoc.getPage(pageNumber)
 
-				if (textLayerRef.current) {
-					textLayerRef.current.innerHTML = ''
-				}
-
-				const page = await pdfDoc.getPage(currentPage)
-
-				if (!isMountedRef.current) {
+				if (isCancelled) {
 					return
 				}
 
 				const originalViewport = page.getViewport({ scale: 1.0 })
-				const pageWidth = originalViewport.width
-				const pageHeight = originalViewport.height
+				const aspectRatio = originalViewport.width / originalViewport.height
 
-				// Dynamically compute padding from CSS styles to prevent overflow scrollbars
-				let paddingX = 32
-				let paddingY = 32
-				const workspace = workspaceRef.current
+				onAspectRatioCalculated(pageNumber, aspectRatio)
 
-				if (workspace) {
-					const style = window.getComputedStyle(workspace)
-
-					paddingX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
-					paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
-				}
-
-				// Subtract a tiny safety buffer (4px) to prevent subpixel layout rounding from triggering unnecessary scrollbars
+				// Padding is already subtracted from contentRect by ResizeObserver
+				const paddingX = 0
+				const paddingY = 0
 				const availWidth = Math.max(workspaceWidth - paddingX - 4, 200)
 				const availHeight = Math.max(workspaceHeight - paddingY - 4, 200)
 
-				const scaleX = availWidth / pageWidth
-				const scaleY = availHeight / pageHeight
-				const fitScale = Math.min(scaleX, scaleY)
-
-				const actualScale = scale * fitScale
+				// Calculate display size for fitting the page to viewport (contain logic)
+				const baseDisplayWidth = Math.min(availWidth, availHeight * aspectRatio)
+				const actualScale = scale * (baseDisplayWidth / originalViewport.width)
 				const viewport = page.getViewport({ scale: actualScale })
-
-				if (isMountedRef.current) {
-					setDimensions({ width: viewport.width, height: viewport.height })
-				}
 
 				const canvas = canvasRef.current
 
-				if (!canvas) {
+				if (!canvas || isCancelled) {
 					return
 				}
 
@@ -164,6 +116,7 @@ export default function PdfViewer({ src }: { src: string }) {
 					canvas: canvas,
 				}
 
+				// Cancel previous render tasks to prevent canvas tearing & resource leaks
 				if (renderTaskRef.current) {
 					renderTaskRef.current.cancel()
 				}
@@ -171,32 +124,12 @@ export default function PdfViewer({ src }: { src: string }) {
 				renderTaskRef.current = page.render(renderContext)
 				await renderTaskRef.current.promise
 
-				// Render Text Layer overlay for high-fidelity text selection & copying
-				if (!isMountedRef.current) {
-					return
-				}
-
-				if (textLayerRef.current) {
-					const textContent = await page.getTextContent()
-
-					if (!isMountedRef.current) {
-						return
-					}
-
-					const textLayer = new TextLayer({
-						textContentSource: textContent,
-						container: textLayerRef.current,
-						viewport: viewport,
-					})
-
-					textLayerInstanceRef.current = textLayer
-					await textLayer.render()
-				}
+				setIsPageLoading(false)
 			} catch (err: unknown) {
-				const error = err as { name?: string; message?: string }
+				const error = err as { name?: string }
 
 				if (error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
-					console.error(`Error rendering page ${currentPage}:`, err)
+					console.error(`Error rendering page ${pageNumber}:`, err)
 				}
 			}
 		}
@@ -204,24 +137,195 @@ export default function PdfViewer({ src }: { src: string }) {
 		renderPage()
 
 		return () => {
+			isCancelled = true
+
 			if (renderTaskRef.current) {
 				renderTaskRef.current.cancel()
 			}
-
-			if (textLayerInstanceRef.current) {
-				textLayerInstanceRef.current.cancel()
-			}
 		}
-	}, [pdfDoc, currentPage, scale, workspaceWidth, workspaceHeight])
+	}, [pdfDoc, pageNumber, scale, workspaceWidth, workspaceHeight, onAspectRatioCalculated])
+
+	return (
+		<>
+			{isPageLoading && (
+				<div
+					className={styles.pdfLoadingOverlay}
+					style={{ position: 'absolute', zIndex: 1 }}>
+					<div className={styles.pdfSpinner} />
+				</div>
+			)}
+			<canvas
+				ref={canvasRef}
+				className={styles.pdfPageCanvas}
+			/>
+		</>
+	)
+}
+
+export default function PdfViewer({ src }: { src: string }) {
+	const pdfPromise = getPdfPromise(src)
+	const { doc: pdfDoc, error } = use(pdfPromise)
+	const numPages = pdfDoc?.numPages || 0
+
+	const [currentPage, setCurrentPage] = useState<number>(1)
+	const [scale, setScale] = useState<number>(1.0)
+	const [workspaceWidth, setWorkspaceWidth] = useState<number>(0)
+	const [workspaceHeight, setWorkspaceHeight] = useState<number>(0)
+	const [fallbackAspectRatio, setFallbackAspectRatio] = useState<number>(0.7071) // Default to standard A4 (1 / sqrt(2))
+	const [pageAspectRatios, setPageAspectRatios] = useState<Record<number, number>>({})
+
+	const workspaceRef = useRef<HTMLDivElement>(null)
+	const isScrollingRef = useRef<boolean>(false)
+
+	// Update active workspace dimensions dynamically using ResizeObserver to prevent layout race conditions
+	useEffect(() => {
+		const workspace = workspaceRef.current
+
+		if (!workspace) {
+			return
+		}
+
+		const observer = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const { width, height } = entry.contentRect
+
+				setWorkspaceWidth(width)
+				setWorkspaceHeight(height)
+			}
+		})
+
+		observer.observe(workspace)
+
+		return () => {
+			observer.disconnect()
+		}
+	}, [])
+
+	// Pre-fetch the first page to calibrate fallback aspect ratio accurately on mount
+	useEffect(() => {
+		if (!pdfDoc) {
+			return
+		}
+
+		pdfDoc
+			.getPage(1)
+			.then((page) => {
+				const viewport = page.getViewport({ scale: 1.0 })
+
+				setFallbackAspectRatio(viewport.width / viewport.height)
+			})
+			.catch((err) => {
+				console.error('Error pre-fetching page 1 aspect ratio:', err)
+			})
+	}, [pdfDoc])
+
+	// IntersectionObserver to dynamically track visible pages in viewport and update currentPage
+	useEffect(() => {
+		if (!pdfDoc || numPages <= 0) {
+			return
+		}
+
+		const workspace = workspaceRef.current
+
+		if (!workspace) {
+			return
+		}
+
+		const pageVisibility: Record<number, number> = {}
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				// Skip scroll updates if we are in programmatic scroll transition
+				if (isScrollingRef.current) {
+					return
+				}
+
+				entries.forEach((entry) => {
+					const pageNum = Number(entry.target.getAttribute('data-page-number'))
+
+					if (pageNum) {
+						pageVisibility[pageNum] = entry.intersectionRatio
+					}
+				})
+
+				// Determine page with maximum visible ratio in viewport
+				let maxRatio = 0
+				let mostVisiblePage = currentPage
+
+				Object.entries(pageVisibility).forEach(([pageNumStr, ratio]) => {
+					const pageNum = Number(pageNumStr)
+
+					if (ratio > maxRatio) {
+						maxRatio = ratio
+						mostVisiblePage = pageNum
+					}
+				})
+
+				// Threshold buffer to prevent erratic switching on boundaries
+				if (maxRatio > 0.05 && mostVisiblePage !== currentPage) {
+					setCurrentPage(mostVisiblePage)
+				}
+			},
+			{
+				root: workspace,
+				rootMargin: '-10% 0px -10% 0px', // Shrink vertical window boundary slightly for precise page indexing
+				threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+			},
+		)
+
+		// Observe all rendered page containers
+		const pageContainers = workspace.querySelectorAll(`.${styles.pdfPageContainer}`)
+
+		pageContainers.forEach((container) => observer.observe(container))
+
+		return () => {
+			observer.disconnect()
+		}
+	}, [pdfDoc, numPages, currentPage])
+
+	// Callback to cache page aspect ratios once calculated by the child PdfPage component
+	const handleAspectRatioCalculated = useCallback((pageNum: number, ar: number) => {
+		setPageAspectRatios((prev) => {
+			if (prev[pageNum] === ar) {
+				return prev
+			}
+
+			return { ...prev, [pageNum]: ar }
+		})
+	}, [])
+
+	// Programmatically scroll the viewport container smoothly to a specific target page
+	const scrollToPage = (pageNum: number) => {
+		const workspace = workspaceRef.current
+
+		if (!workspace) {
+			return
+		}
+
+		const targetEl = workspace.querySelector(`[data-page-number="${pageNum}"]`)
+
+		if (targetEl) {
+			isScrollingRef.current = true
+			setCurrentPage(pageNum)
+
+			targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+			// Disable observer updates briefly to allow the smooth scroll animation to finish
+			setTimeout(() => {
+				isScrollingRef.current = false
+			}, 800)
+		}
+	}
 
 	return (
 		<div className={styles.pdfViewerContainer}>
+			{/* Sticky Top Toolbar with standard Controls */}
 			<div className={styles.pdfToolbar}>
 				<div className={styles.pdfToolbarSection}>
 					<button
 						type="button"
 						className={styles.pdfBtn}
-						onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+						onClick={() => scrollToPage(Math.max(currentPage - 1, 1))}
 						disabled={currentPage <= 1}
 						title="Previous Page">
 						<svg
@@ -242,7 +346,7 @@ export default function PdfViewer({ src }: { src: string }) {
 					<button
 						type="button"
 						className={styles.pdfBtn}
-						onClick={() => setCurrentPage((p) => Math.min(p + 1, numPages))}
+						onClick={() => scrollToPage(Math.min(currentPage + 1, numPages))}
 						disabled={currentPage >= numPages}
 						title="Next Page">
 						<svg
@@ -259,7 +363,7 @@ export default function PdfViewer({ src }: { src: string }) {
 
 				<div className={styles.divider} />
 
-				{/* Zoom Controls */}
+				{/* Zoom Control Buttons */}
 				<div className={styles.pdfToolbarSection}>
 					<button
 						type="button"
@@ -314,6 +418,8 @@ export default function PdfViewer({ src }: { src: string }) {
 					</button>
 				</div>
 			</div>
+
+			{/* Main Scrollable Workspace containing all virtualized pages */}
 			<div
 				ref={workspaceRef}
 				className={styles.pdfWorkspace}>
@@ -331,26 +437,47 @@ export default function PdfViewer({ src }: { src: string }) {
 				)}
 
 				{!error && pdfDoc && (
-					<div
-						className={styles.pdfPageContainer}
-						style={
-							dimensions
-								? {
-										width: `${dimensions.width}px`,
-										height: `${dimensions.height}px`,
-										aspectRatio: `${dimensions.width} / ${dimensions.height}`,
-									}
-								: undefined
-						}>
-						<canvas
-							ref={canvasRef}
-							className={styles.pdfPageCanvas}
-						/>
-						<div
-							ref={textLayerRef}
-							className="textLayer"
-						/>
-					</div>
+					<>
+						{Array.from({ length: numPages }, (_, index) => {
+							const pageNum = index + 1
+							// Check if page falls inside the active virtualization threshold window (±3)
+							const isInsideThreshold = Math.abs(pageNum - currentPage) <= 3
+
+							// Compute precise placeholder geometries to ensure zero scroll jumping
+							const ar = pageAspectRatios[pageNum] || fallbackAspectRatio
+							// Padding is already subtracted from contentRect by ResizeObserver
+							const paddingX = 0
+							const paddingY = 0
+							const availWidth = Math.max(workspaceWidth - paddingX - 4, 200)
+							const availHeight = Math.max(workspaceHeight - paddingY - 4, 200)
+							const baseDisplayWidth = Math.min(availWidth, availHeight * ar)
+							const displayWidth = baseDisplayWidth * scale
+							const displayHeight = displayWidth / ar
+
+							return (
+								<div
+									key={pageNum}
+									data-page-number={pageNum}
+									className={`${styles.pdfPageContainer} ${!isInsideThreshold ? styles.pdfPageLoading : ''}`}
+									style={{
+										width: `${displayWidth}px`,
+										height: `${displayHeight}px`,
+										aspectRatio: `${ar}`,
+									}}>
+									{isInsideThreshold && (
+										<PdfPage
+											pageNumber={pageNum}
+											pdfDoc={pdfDoc}
+											scale={scale}
+											workspaceWidth={workspaceWidth}
+											workspaceHeight={workspaceHeight}
+											onAspectRatioCalculated={handleAspectRatioCalculated}
+										/>
+									)}
+								</div>
+							)
+						})}
+					</>
 				)}
 			</div>
 		</div>

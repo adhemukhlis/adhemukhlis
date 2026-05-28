@@ -110,9 +110,12 @@
 /* PDF Canvas Workspace */
 .pdfWorkspace {
 	flex: 1;
-	overflow: auto;
+	overflow-y: auto;
+	overflow-x: auto;
 	padding: 1rem;
 	display: flex;
+	flex-direction: column;
+	gap: 1rem;
 	background-color: #f3f4f6;
 	position: relative;
 	-webkit-overflow-scrolling: touch; /* Smooth inertia scroll on mobile */
@@ -133,8 +136,38 @@
 	justify-content: center;
 	align-items: center;
 	box-sizing: border-box;
-	margin: auto; /* Centers the page when smaller, allows correct top-left scrolling when larger */
 	flex: none; /* Prevents the container from shrinking horizontally below its natural/canvas width */
+	transition: box-shadow 0.2s ease;
+	margin: 0 auto; /* Perfectly centers pages when small, and shifts naturally to start (left-align) when zoomed to prevent cutoff */
+}
+
+/* Subtle pulse style when page is loading/inactive and rendering */
+.pdfPageLoading {
+	background-color: #ffffff;
+	position: relative;
+}
+
+.pdfPageLoading::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(
+		90deg,
+		rgba(255, 255, 255, 0) 0%,
+		rgba(0, 0, 0, 0.03) 50%,
+		rgba(255, 255, 255, 0) 100%
+	);
+	background-size: 200% 100%;
+	animation: loading-shimmer 1.5s infinite;
+}
+
+@keyframes loading-shimmer {
+	0% {
+		background-position: 200% 0;
+	}
+	100% {
+		background-position: -200% 0;
+	}
 }
 
 /* Highly Responsive Canvas Scaling */
