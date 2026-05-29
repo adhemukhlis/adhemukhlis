@@ -3,7 +3,7 @@
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import { use, useCallback, useEffect, useRef, useState } from 'react'
 
-import styles from './pdf-viewer.module.css'
+import styles from './styles.module.css'
 
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 

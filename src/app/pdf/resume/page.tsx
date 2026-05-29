@@ -12,7 +12,7 @@ const PdfViewer = dynamic(() => import('@/components/PdfViewer'), {
 })
 
 const Page = () => {
-	return <PdfViewer src="/api/pdf/dummy" />
+	return <PdfViewer src="/api/pdf/resume" />
 }
 
 export default Page
